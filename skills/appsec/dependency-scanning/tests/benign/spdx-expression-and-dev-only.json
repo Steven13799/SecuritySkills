@@ -1,0 +1,19 @@
+{
+  "_fixture": "BENIGN — dependency-scanning license logic",
+  "_expected": "No High copyleft finding. (1) SPDX expressions/exceptions resolve to a permissive or linking-safe option; (2) the GPL tool is dev-only and never distributed. Substring-matching 'GPL'/'AGPL' here is a false positive.",
+  "name": "demo-app",
+  "license": "MPL-2.0 OR Apache-2.0",
+  "dependencies": {
+    "runtime-lib": {
+      "version": "1.2.3",
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0"
+    }
+  },
+  "devDependencies": {
+    "some-gpl-build-tool": {
+      "version": "3.0.0",
+      "license": "GPL-3.0-only",
+      "_note": "build-time only; not shipped or network-exposed"
+    }
+  }
+}

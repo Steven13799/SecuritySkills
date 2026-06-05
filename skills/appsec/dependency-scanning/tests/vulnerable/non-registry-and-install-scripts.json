@@ -1,0 +1,13 @@
+{
+  "_fixture": "VULNERABLE — dependency-scanning coverage gaps",
+  "_expected": "Finding(s). (1) git/URL/tarball deps have no registry version -> CVE/version matching silently does not apply; must be flagged as supply-chain risk. (2) A postinstall hook in the resolved tree is a malware-delivery vector and must be surfaced.",
+  "dependencies": {
+    "left-pad": "git+https://github.com/attacker/left-pad.git#a1b2c3d",
+    "internal-ui": "https://cdn.untrusted.example/internal-ui-1.0.0.tgz",
+    "tool": "github:org/repo#semver:^1.0.0",
+    "vendored": "file:./vendor/vendored-1.0.0"
+  },
+  "scripts": {
+    "postinstall": "node ./scripts/setup.js"
+  }
+}

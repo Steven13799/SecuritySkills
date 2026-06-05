@@ -1,0 +1,15 @@
+# BENIGN fixture (coverage, not a vuln) — dependency-scanning manifest discovery
+# Expected: this file MUST be discovered as a Python manifest. Pre-1.0.1 the
+# trigger list omitted pyproject.toml (PEP 621), so a Glob keyed on the old list
+# would report "no manifests found" on a modern Python project. No license/CVE
+# finding is implied here; the point is that the scanner enumerates these deps.
+[project]
+name = "demo"
+version = "0.1.0"
+dependencies = [
+    "requests>=2.31",
+    "urllib3<2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
