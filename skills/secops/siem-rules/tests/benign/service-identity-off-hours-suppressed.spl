@@ -1,0 +1,7 @@
+`comment("Benign: service identity runs outside business hours by design")`
+index=wineventlog sourcetype="WinEventLog:Security" EventCode=4624
+| eval TargetUserName="svc-backup"
+| eval hour="02"
+| lookup identity_inventory user as TargetUserName output identity_type, privileged
+| eval identity_type=coalesce(identity_type, "service_account")
+| where identity_type!="service_account" AND identity_type!="managed_identity"

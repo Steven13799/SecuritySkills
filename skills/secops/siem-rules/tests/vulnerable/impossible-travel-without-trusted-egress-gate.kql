@@ -1,0 +1,13 @@
+// Vulnerable rule shape: alerts on raw GeoIP distance without checking whether
+// both IPs are trusted VPN/SASE/proxy egress nodes or whether the same managed
+// device/session explains the movement.
+SigninLogs
+| where TimeGenerated > ago(24h)
+| where ResultType == 0
+| where isnotempty(LocationDetails.geoCoordinates.latitude)
+| sort by UserPrincipalName asc, TimeGenerated asc
+| serialize
+| extend PrevLatitude = prev(todouble(LocationDetails.geoCoordinates.latitude), 1)
+| extend PrevLongitude = prev(todouble(LocationDetails.geoCoordinates.longitude), 1)
+| where UserPrincipalName == prev(UserPrincipalName, 1)
+| project TimeGenerated, UserPrincipalName, IPAddress, PrevLatitude, PrevLongitude

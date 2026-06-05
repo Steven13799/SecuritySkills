@@ -1,0 +1,18 @@
+// Benign: same user appears in two distant locations because both IPs are
+// corporate SASE egress nodes. A production rule should suppress or lower
+// severity only when the trusted-egress lookup is current.
+let TrustedEgress = datatable(IPAddress:string, Provider:string, Asn:int)
+[
+    "198.51.100.10", "Corporate SASE", 64512,
+    "203.0.113.20", "Corporate SASE", 64512
+];
+let SigninLogs = datatable(TimeGenerated:datetime, UserPrincipalName:string, IPAddress:string, ResultType:int)
+[
+    datetime(2026-06-05T13:00:00Z), "analyst@example.com", "198.51.100.10", 0,
+    datetime(2026-06-05T13:08:00Z), "analyst@example.com", "203.0.113.20", 0
+];
+SigninLogs
+| lookup kind=leftouter TrustedEgress on IPAddress
+| extend IsTrustedEgress = isnotempty(Provider)
+| summarize TrustedEgressCount=countif(IsTrustedEgress) by UserPrincipalName
+| where TrustedEgressCount == 2

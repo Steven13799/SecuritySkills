@@ -12,7 +12,7 @@ phase: [operate]
 frameworks: [MITRE-ATT&CK-v16]
 difficulty: intermediate
 time_estimate: "20-40min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -603,6 +603,8 @@ Produce SIEM rule deliverables in this structure:
 
 ### Known False Positives
 - [List specific FP sources]
+- Corporate VPN, SASE, proxy, and identity-provider egress nodes can create impossible-travel geography artifacts. Suppress or lower severity only when trusted egress evidence is current and tied to the observed source IP.
+- Service accounts, service principals, and managed identities often run outside business hours by design. Split identity types before treating off-hours activity as human privileged-account behavior.
 
 ### Tuning Guidance
 - [Specific tuning recommendations]
