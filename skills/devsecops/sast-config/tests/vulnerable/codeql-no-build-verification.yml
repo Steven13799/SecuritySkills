@@ -1,0 +1,22 @@
+# VULNERABLE — sast-config CI review
+# Expected: Finding (High). CodeQL on a COMPILED language (java) uses autobuild
+# with no build-success / database-completeness verification. If autobuild
+# partially fails, analyze reports few/zero alerts -> silent false negative that
+# looks like a passing scan. (SKILL.md Step 6: verify build success.)
+name: CodeQL
+on:
+  pull_request: {}
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        language: [java]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+      - uses: github/codeql-action/autobuild@v3   # may silently half-compile
+      - uses: github/codeql-action/analyze@v3     # "0 alerts" on a near-empty DB
+      # MISSING: build-success check / lines-of-code assertion / fail-on-build-error

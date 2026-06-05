@@ -12,7 +12,7 @@ phase: [build]
 frameworks: [OWASP-ASVS-4.0.3, CWE-Top-25]
 difficulty: intermediate
 time_estimate: "30-60min"
-version: "1.0.0"
+version: "1.0.1"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -112,12 +112,21 @@ Map the active SAST rule set against CWE Top 25 (2024) to identify coverage gaps
 | 9 | CWE-352 | CSRF | Partial | Framework-specific | `java/csrf`, `python/csrf` |
 | 10 | CWE-434 | Unrestricted Upload | Partial | Framework-specific | Pattern-dependent |
 
-For each CWE, verify:
-- At least one active rule covers the weakness for each language in the codebase.
-- Rule is enabled (not suppressed in configuration).
-- Rule severity matches the CWE's risk (Top 10 CWEs should not be INFO level).
+**SAST-confidence tiering (read before raising gap findings).** Some CWEs are only weakly or unreliably detectable by SAST, so a "0 rules" result is *expected*, not a coverage defect. Do **not** drive High/Medium gap severity from them:
 
-**Finding classification:** CWE Top 10 weakness with zero SAST coverage for a language in use is **High**. CWE 11-25 with no coverage is **Medium**.
+| CWE | SAST confidence | Note |
+|-----|-----------------|------|
+| CWE-79, CWE-89, CWE-78, CWE-22 | High (taint-trackable) | Genuine gap if uncovered for a language in use |
+| CWE-20, CWE-434 | Low (semantic/contextual) | Often needs framework knowledge; partial at best |
+| CWE-352 (CSRF) | Low (framework/runtime property) | Better handled by framework config/runtime, not SAST |
+| CWE-787, CWE-416, CWE-125 | Low outside C/C++ with heavy analysis | "0 rules" on a Python/JS project is not a finding |
+
+For each CWE, verify:
+- For **high-confidence** CWEs: at least one active rule covers the weakness for each language in the codebase.
+- Rule is enabled (not suppressed in configuration).
+- Rule severity matches the CWE's risk (Top 10 high-confidence CWEs should not be INFO level).
+
+**Finding classification:** A **high-confidence** CWE (e.g., 79/89/78/22) with zero SAST coverage for a language in use is **High** (Top 10) / **Medium** (11-25). For **low-confidence** CWEs, record the gap as **informational** in the coverage table and recommend a complementary control (framework setting, DAST, manual review) instead of raising a SAST gap finding — flagging these as High/Medium produces false findings for weaknesses SAST cannot reliably cover.
 
 ---
 
@@ -160,11 +169,18 @@ Custom rules should follow Semgrep's rule schema. Example of a well-authored cus
 ```yaml
 rules:
   - id: custom.auth.jwt-none-algorithm
+    # Case-insensitive: 'none'/'None'/'NONE' are all accepted by libraries.
+    # A literal pattern cannot see an algorithm assigned to a variable elsewhere;
+    # for that, author a taint-mode rule (mode: taint) from config sources to the
+    # jwt.encode/decode sink. (Illustrates Pitfall: test rules against variants.)
     patterns:
-      - pattern: |
-          jwt.encode($PAYLOAD, ..., algorithm="none")
-      - pattern: |
-          jwt.decode($TOKEN, ..., algorithms=["none", ...])
+      - pattern-either:
+          - pattern: jwt.encode($PAYLOAD, ..., algorithm="none")
+          - pattern: jwt.encode($PAYLOAD, ..., algorithm="None")
+          - pattern: jwt.encode($PAYLOAD, ..., algorithm="NONE")
+          - pattern: jwt.decode($TOKEN, ..., algorithms=["none", ...])
+          - pattern: jwt.decode($TOKEN, ..., algorithms=["None", ...])
+          - pattern: jwt.decode($TOKEN, ..., algorithms=["NONE", ...])
     message: >
       JWT with 'none' algorithm detected. This disables signature verification
       and allows token forgery. Use RS256 or ES256.
@@ -183,9 +199,20 @@ rules:
         - https://cwe.mitre.org/data/definitions/327.html
 
   - id: custom.auth.hardcoded-admin-bypass
-    pattern: |
-      if $USER == "admin":
-          return True
+    # Broadened beyond `$USER == "admin"`: also catches role-field comparisons
+    # and membership checks. Inversions (`!=`) and value-from-variable cases
+    # still need taint mode — a single literal pattern is intentionally narrow.
+    patterns:
+      - pattern-either:
+          - pattern: |
+              if $USER == "admin":
+                  return True
+          - pattern: |
+              if $OBJ.$ROLE == "admin":
+                  return True
+          - pattern: |
+              if "admin" in $X:
+                  return True
     message: >
       Hardcoded admin bypass detected. Authentication decisions must use
       proper identity verification, not string comparison against hardcoded values.
@@ -256,10 +283,10 @@ query-filters:
 
 **What to verify:**
 
-- `security-extended` or `security-and-quality` query suite is used (not just `default`).
+- `security-extended` or `security-and-quality` query suite is used (not just `default`). Note the trade-off: `security-and-quality` adds maintainability/quality queries that raise noise and runtime and can blow the <10-minute PR budget — prefer `security-extended` on PR checks and reserve `security-and-quality` for the scheduled full scan.
 - Custom query directory exists for org-specific patterns.
-- `paths-ignore` does not exclude production source code.
-- `query-filters` exclusions have documented justification.
+- `paths-ignore` does not exclude production source code. Excluding `test/`/`vendor/` is acceptable for first-party SAST, but note that **vendored/copied third-party code** under those paths then goes unscanned — confirm such code is covered by dependency scanning instead.
+- `query-filters` exclusions have documented justification and are rule-id-scoped (not broad tag excludes).
 
 #### 4.2 CodeQL Custom Query Structure
 
@@ -360,11 +387,13 @@ value = request.args.get("id")  # nosemgrep: python.django.security.injection.sq
 **What to verify:**
 
 - Every suppression has a documented justification (not just `nosemgrep`).
+- **Suppressions are rule-scoped.** A bare `# nosemgrep` (no rule id) disables *all* rules on that line — a silent coverage hole. Flag unscoped `nosemgrep` and overly broad CodeQL `query-filters` `exclude` by tag; require `# nosemgrep: <rule-id>` form.
+- **Baseline/diff-aware suppression is tracked, not permanent.** `semgrep ci --baseline-commit` and CodeQL PR-diff mode hide findings that predate the baseline. Verify a scheduled **full** scan exists *and* that its pre-existing findings are tracked to closure in a backlog — otherwise a known vulnerability older than the baseline never appears in any PR and is effectively invisible.
 - Suppressions are reviewed periodically (quarterly).
-- False positive rate is tracked as a metric (target: < 20% FP rate).
+- False positive rate is tracked as a **trend**, not a hard gate. (A fixed "< 20% FP" target is unmeasurable without ground-truth labels and perversely incentivizes disabling noisy-but-valid rules to hit the number; track triaged FP/TP over time instead.)
 - True positive findings have a defined SLA (Critical: 7 days, High: 30 days, Medium: 90 days).
 
-**Finding classification:** No false positive management process is **Medium**. Suppressions without justification is **High**. No SLA for true positive remediation is **Medium**.
+**Finding classification:** No false positive management process is **Medium**. Suppressions without justification is **High**. Unscoped `nosemgrep` suppressions are **High** (silent coverage hole). Baseline-suppressed findings with no full-scan backlog are **Medium**. No SLA for true positive remediation is **Medium**.
 
 ---
 
@@ -430,8 +459,9 @@ jobs:
 - SAST container/action is pinned to a specific version (not `latest`).
 - Results are uploaded to a central dashboard (Semgrep App, GitHub Security tab, SonarQube).
 - Scan time is under 10 minutes for PR checks (developer experience matters).
+- **For compiled languages (Java, C#, C/C++, Kotlin, Go-with-cgo), verify the CodeQL build actually succeeded.** CodeQL only analyzes code it builds; if `autobuild` partially fails, the database covers a fraction of the source and `analyze` reports few/zero alerts — a **false negative that looks like a passing scan**. Confirm each matrix language produced a populated database: check the "CodeQL database created" / lines-of-code in the run log, fail the job on build errors (don't let autobuild swallow them), and prefer an explicit manual build step over `autobuild` for non-trivial projects.
 
-**Finding classification:** No SAST in CI pipeline is **Critical**. SAST runs but is not a required status check is **High**. No scheduled full-repo scan is **Medium**. SAST action unpinned is **Medium**.
+**Finding classification:** No SAST in CI pipeline is **Critical**. SAST runs but is not a required status check is **High**. No scheduled full-repo scan is **Medium**. SAST action unpinned is **Medium**. CodeQL on a compiled language with unverified build success / no database-completeness check is **High** (silent false negative).
 
 ---
 
@@ -564,4 +594,5 @@ This skill processes SAST configuration files, custom rules, and code patterns t
 
 ## Changelog
 
+- **1.0.1** -- Reduce false findings and close blind spots: tier the CWE Top 25 matrix by SAST confidence so weakly-detectable CWEs (CSRF/OOB/UAF) don't generate gap findings; add a CodeQL build-success / database-completeness check (silent false negative on compiled languages); flag unscoped `nosemgrep` and untracked baseline/diff-aware suppression; reframe the <20% FP target as a trend; note the `security-and-quality` vs <10-min PR-budget trade-off and vendored-code exclusion caveat; broaden the example JWT-`none` (case variants) and admin-bypass (role/membership) custom rules with taint-mode notes; add benign + vulnerable test fixtures.
 - **1.0.0** -- Initial release. Full coverage of SAST configuration review against OWASP ASVS 4.0.3 and CWE Top 25, with Semgrep and CodeQL patterns.
