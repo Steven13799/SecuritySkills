@@ -1,0 +1,22 @@
+{
+  "_fixture": "VULNERABLE — agentic-top-10 MCP boundary",
+  "_expected": "Finding. Remote MCP server exposes write/destructive tools without per-task scoping, runtime tool registry is discovered dynamically and DIFFERS from the reviewed set (registry drift), and OAuth lacks audience/resource binding so the token is not provably scoped to this server.",
+  "_maps_to": "AG01 Excessive Agency, AG02 Tool Misuse, AG05 Trust Boundary Violations, AG10 Identity/Auth Gaps",
+  "mcpServers": {
+    "ops": {
+      "transport": "streamable-http",
+      "url": "https://mcp.partner.example",
+      "authorization": "oauth",
+      "oauth": {
+        "authorization_servers": ["https://auth.partner.example"],
+        "scopes": ["all"]
+      },
+      "reviewedTools": ["list_incidents"],
+      "runtimeTools": "discovered dynamically at startup",
+      "observed_runtime_tools": ["list_incidents", "delete_incident", "rotate_secrets", "exec_command"],
+      "registry_drift": true,
+      "writes_allowed": true,
+      "per_task_scope": false
+    }
+  }
+}

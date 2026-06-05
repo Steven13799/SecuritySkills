@@ -1,0 +1,22 @@
+{
+  "_fixture": "BENIGN — agentic-top-10 MCP boundary",
+  "_expected": "No finding. Remote streamable-http server with OAuth where the access token's audience/resource is bound to this MCP server, explicit reviewed tool allowlist that equals the runtime registry, and read-only tools only.",
+  "_maps_to": "Safe state for AG05 (trust boundary) and AG10 (identity/auth)",
+  "mcpServers": {
+    "ticketing": {
+      "transport": "streamable-http",
+      "url": "https://mcp.example.com",
+      "authorization": "oauth",
+      "oauth": {
+        "authorization_servers": ["https://auth.example.com"],
+        "resource": "https://mcp.example.com",
+        "audience": "https://mcp.example.com",
+        "scopes": ["tickets:read"]
+      },
+      "reviewedTools": ["list_tickets", "get_ticket"],
+      "runtimeTools": ["list_tickets", "get_ticket"],
+      "registry_drift": false,
+      "writes_allowed": false
+    }
+  }
+}

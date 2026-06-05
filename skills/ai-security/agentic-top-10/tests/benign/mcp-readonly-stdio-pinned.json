@@ -1,0 +1,19 @@
+{
+  "_fixture": "BENIGN — agentic-top-10 MCP boundary",
+  "_expected": "No finding. Local read-only stdio server, version-pinned package, explicit tool/resource allowlist, no write/destructive tools, bounded resource URI template, no broad filesystem root. Reviewed registry == runtime registry.",
+  "_maps_to": "Safe state for AG01/AG02/AG05/AG10",
+  "mcpServers": {
+    "readonly-docs": {
+      "transport": "stdio",
+      "command": "node",
+      "args": ["./servers/docs-readonly.js"],
+      "package": "@acme/docs-mcp@1.4.2",
+      "tools": ["search_docs", "read_doc"],
+      "resources": ["docs://public/{slug}"],
+      "writes_allowed": false,
+      "runtime_tools": ["search_docs", "read_doc"],
+      "filesystem_root": "./docs",
+      "network_egress": "none"
+    }
+  }
+}
