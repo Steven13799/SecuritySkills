@@ -13,7 +13,7 @@ phase: [build, operate]
 frameworks: [OWASP-Secrets-Management, NIST-SP-800-57-Part1-Rev5]
 difficulty: intermediate
 time_estimate: "20-40min"
-version: "1.0.1"
+version: "1.0.2"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -136,6 +136,31 @@ xox[bpors]-[0-9]{10,13}-[A-Za-z0-9-]{20,}
 (?i)(?:api[_-]?key|apikey)\s*[=:]\s*['"][A-Za-z0-9]{20,}['"]
 ```
 
+**Modern provider key formats (high-incident, keep current):**
+
+```regex
+# OpenAI project/user keys
+sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}
+
+# Google API key
+AIza[0-9A-Za-z\-_]{35}
+
+# Stripe restricted key (secret-class; pk_ is publishable, see 2.2)
+rk_(?:live|test)_[A-Za-z0-9]{24,}
+
+# Slack app-level token
+xapp-[0-9]-[A-Za-z0-9-]+
+
+# npm / Hugging Face / SendGrid / Twilio
+npm_[A-Za-z0-9]{36}
+hf_[A-Za-z0-9]{34,}
+SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}
+SK[0-9a-fA-F]{32}
+
+# GCP service-account JSON (the sensitive field)
+"private_key"\s*:\s*"-----BEGIN (?:RSA )?PRIVATE KEY-----
+```
+
 **Private Keys:**
 
 ```regex
@@ -145,6 +170,8 @@ xox[bpors]-[0-9]{10,13}-[A-Za-z0-9-]{20,}
 # PGP Private Key
 -----BEGIN\sPGP\sPRIVATE\sKEY\sBLOCK-----
 ```
+
+> **Encoded-secret pass (do not skip).** The patterns above match **plaintext only**. Kubernetes `Secret` objects store every value under `data:` as base64, and credentials are frequently committed base64-encoded (`*.b64`, encoded service-account JSON, `kubeseal` inputs). For any Kubernetes `kind: Secret` `data:` value, any `stringData` rendered output, or any base64 blob ≥ 40 chars, **base64-decode it in memory and re-run the patterns above against the decoded bytes** (never print the decoded value). Without this decode-and-rescan step, the densest source of committed credentials in modern repos is invisible to detection.
 
 **Connection Strings and Passwords:**
 
@@ -164,14 +191,20 @@ eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*
 Before flagging a detected string as a hardcoded secret, apply these verification checks:
 
 1. **Verify the value is a real secret, not a placeholder or example.** Strings like `your-api-key-here`, `CHANGEME`, `TODO`, `xxx`, `example`, `test`, `dummy`, `fake`, `<INSERT_KEY>`, or `replace-me` are placeholder values, not leaked secrets. Do NOT flag these.
-2. **Check entropy.** Real secrets (API keys, tokens, passwords) have high entropy — they appear random. Low-entropy strings like `password`, `admin`, `root`, `mysecret`, or dictionary words in config comments are not actual secrets. Only flag password assignments where the value appears to be a real credential (high-entropy, non-dictionary string of 8+ characters).
-3. **Recognize known secret prefixes.** When a string matches a known secret format (e.g., `AKIA*` for AWS, `sk-*` for Stripe/OpenAI, `ghp_*`/`gho_*`/`ghu_*` for GitHub, `xox[bpors]-*` for Slack, `glpat-*` for GitLab, `eyJ*` for JWTs), it is likely a real secret and should be flagged.
-4. **Distinguish secrets findings from architectural observations.** This skill should focus on **finding actual secrets in code and configuration**. The following are NOT secrets findings and should be excluded from the findings count:
+2. **Check entropy, but anchor it with a non-secret shape filter.** Real secrets have high entropy, but so do many benign strings. Before flagging on entropy alone, exclude values whose *shape* identifies them as non-secrets: Subresource Integrity hashes (`sha256-…`/`sha384-…`/`sha512-…`), bare hex digests of length 32/40/64 (MD5/SHA-1/SHA-256 content or commit hashes), RFC-4122 UUIDs, and lockfile integrity digests. Low-entropy strings like `password`, `admin`, `root`, or dictionary words are also not secrets. Only flag password assignments where the value is a high-entropy, non-dictionary, non-hash/non-UUID string of 8+ characters.
+3. **Exclude public-by-design keys (high-value false-positive class).** Some high-entropy keys are *meant* to ship in client code; their security comes from referer/domain/scope restrictions, not secrecy. Report these as **informational at most — never as a leaked-credential finding**:
+   - Stripe **publishable** keys: `pk_live_*` / `pk_test_*` (the secret is `sk_live_*`/`rk_live_*`)
+   - Firebase Web config `apiKey` (`AIza…` inside a `firebaseConfig`/web client object)
+   - Sentry **public** DSN (`https://<publicKey>@<org>.ingest.sentry.io/<id>`)
+   - Algolia **search-only** API key, Google Maps **browser** key, `rzp_test_*`
+   Do not flag `pk_*` as if it were `sk_*`.
+4. **Recognize known secret prefixes.** When a string matches a known secret format (e.g., `AKIA*` for AWS, `sk-*`/`sk-proj-*` for OpenAI, `sk_live_*`/`rk_live_*` for Stripe, `ghp_*`/`gho_*`/`ghu_*` for GitHub, `xox[bpors]-*`/`xapp-*` for Slack, `glpat-*` for GitLab, `AIza*` (outside a public web config) for Google, `npm_*`, `hf_*`, `SG.*` for SendGrid, `eyJ*` for JWTs), it is likely a real secret and should be flagged.
+5. **Distinguish secrets findings from architectural observations.** This skill should focus on **finding actual secrets in code and configuration**. The following are NOT secrets findings and should be excluded from the findings count:
    - Absence of secret detection tooling (note in the Detection Tooling Status table, not as a finding)
    - Absence of a centralized secrets manager (note in recommendations, not as a finding)
    - Missing rotation automation (note in recommendations, not as a finding)
    - Infrastructure misconfigurations unrelated to secrets (e.g., public S3 buckets, debug mode, public database endpoints) — these belong to other skills
-5. **Scope to the skill's domain.** Only report findings where a secret (credential, key, token, certificate) is actually present in the file. General security misconfigurations, missing best practices, and architectural gaps should be noted in the Prioritized Remediation Plan section, not as numbered findings.
+6. **Scope to the skill's domain.** Only report findings where a secret (credential, key, token, certificate) is actually present in the file. General security misconfigurations, missing best practices, and architectural gaps should be noted in the Prioritized Remediation Plan section, not as numbered findings.
 
 #### 2.3 Detection Tool Configuration Review
 
@@ -188,7 +221,7 @@ Verify that at least one secret detection tool is configured and integrated:
 
 - Tool is configured in CI pipeline (runs on every PR/push).
 - Tool is configured as a pre-commit hook (prevents secrets from entering history).
-- Baseline file is maintained (for detect-secrets).
+- Baseline file is maintained **and audited** (for detect-secrets). A `.secrets.baseline` is not a positive signal by mere presence: run `detect-secrets audit` so every entry is human-labeled, and confirm the baseline is regenerated against current `HEAD`. An entry marked `"is_secret": false` on a genuinely live secret silently suppresses it forever, and a stale baseline analyzes the wrong tree.
 - Custom rules cover organization-specific secret formats.
 - Allowlist entries are documented with justification (false positive suppression must not create blind spots).
 
@@ -471,5 +504,6 @@ This skill processes configuration files and code that may contain secret values
 
 ## Changelog
 
+- **1.0.2** -- Reduce false positives and close detection gaps: add a public-by-design key class (Stripe `pk_*`, Firebase web `apiKey`, Sentry DSN, Algolia search key) so shippable client keys are not flagged as leaks; anchor the entropy check with a non-secret shape filter (SRI/hex-digest/UUID); add a base64 decode-and-rescan pass for Kubernetes `kind: Secret` `data:` and encoded blobs; expand the prefix catalog with current high-incident formats (`sk-proj-`, `AIza`, `rk_live_`, `xapp-`, `npm_`, `hf_`, `SG.`, Twilio `SK`, GCP SA-JSON `private_key`); require `detect-secrets audit` of the baseline rather than crediting its mere presence.
 - **1.0.1** -- Add false positive filtering guidance: distinguish real secrets from placeholders/examples, verify entropy, scope findings to actual secrets (not architectural gaps).
 - **1.0.0** -- Initial release. Full coverage of OWASP Secrets Management Cheat Sheet and NIST SP 800-57 Part 1 Rev 5 for secrets management review.
