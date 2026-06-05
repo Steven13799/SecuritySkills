@@ -13,7 +13,7 @@ phase: [design, build, review]
 frameworks: [OWASP-Agentic-AI, MITRE-ATLAS, NIST-AI-RMF]
 difficulty: advanced
 time_estimate: "45-90min"
-version: "1.0.1"
+version: "1.0.2"
 author: unitoneai
 license: MIT
 allowed-tools: Read, Grep, Glob
@@ -62,6 +62,7 @@ Before beginning the assessment, gather the following. If any item is unavailabl
 |---|---|---|
 | Agent architecture diagram | Design docs, README, or infrastructure-as-code | Identifies trust boundaries, delegation chains, and tool surface |
 | Tool/function definitions | Code files defining tool schemas, OpenAPI specs, MCP server configs | Determines what each agent can actually do |
+| MCP tool/resource boundary | MCP server manifests/configs, runtime registry export, transport/auth settings | Verifies server identity, registry drift, resource scope, and result trust before tools/resources are exposed to agents |
 | Permission model | IAM configs, role definitions, credential stores | Reveals whether least-privilege is enforced |
 | Memory/state persistence | Vector DB configs, session stores, scratchpad files | Exposes memory poisoning surface |
 | Human approval gates | Workflow configs, UI code, approval logic | Determines if HITL can be bypassed |
@@ -428,7 +429,39 @@ Grep: "send_message|delegate|dispatch|publish|subscribe|queue" in **/*.{py,ts,js
 
 # Human approval gates
 Grep: "approve|confirm|human_in_the_loop|hitl|review|authorize" in **/*.{py,ts,js,yaml,yml}
+
+# MCP server and runtime registry evidence
+Grep: "mcpServers|modelcontextprotocol|McpServer|MCPClient|StdioServerParameters|StreamableHTTP|SSEServerTransport" in **/*.{py,ts,js,json,yaml,yml,toml}
+Grep: "tools/list|resources/list|prompts/list|ResourceTemplate|uriTemplate|resource_template" in **/*.{py,ts,js,json,yaml,yml}
+Grep: "npx .*@latest|uvx|pipx|stdio|command.*mcp|args.*mcp" in **/*.{json,yaml,yml,toml}
+Grep: "authorization_servers|resource=|audience|OAuth|Bearer" in **/*.{py,ts,js,json,yaml,yml,toml}
 ```
+
+### MCP Tool and Resource Boundary Evidence
+
+If the architecture uses Model Context Protocol (MCP), review it as a first-class agent trust boundary rather than treating it as a generic tool list. MCP servers can expose tools, resources, and prompts through local `stdio` processes or remote HTTP transports, and the runtime registry can differ from static documentation.
+
+For each MCP server, capture:
+
+| Evidence Item | Secure State | Finding If Missing |
+|---|---|---|
+| Transport type | `stdio` for local trusted processes or HTTP behind authenticated service boundary | Medium — transport risk not understood |
+| Server identity/provenance | Pinned package/version, trusted executable path, verified publisher, or trusted remote origin | High — untrusted or mutable server can alter tool behavior |
+| Runtime registry export | Reviewed tools/resources/prompts match what the host receives from `tools/list`, `resources/list`, and `prompts/list` | High — unreviewed capabilities available at runtime |
+| Authorization boundary | OAuth audience/resource binding, mTLS, service identity, or explicit local trust boundary | High — server or caller identity unverifiable |
+| Side-effect classification | Tools are labeled read-only, write, destructive, external-send, or deploy | High — agent can invoke consequential actions without correct gates |
+| Resource URI scope | Templates are tenant/path bounded and normalize traversal-sensitive inputs | High — resource template can expose unintended files or tenant data |
+| Result trust handling | Tool/resource/prompt results are treated as untrusted data before re-entering model context | High — indirect prompt injection or exfiltration through MCP results |
+| Update approval | New or changed tools/resources/prompts require security review before production exposure | Medium — registry drift bypasses review |
+
+Map MCP findings to the existing threat categories:
+
+- **AG01 / AG02:** MCP server exposes write, delete, deploy, send, or filesystem tools without per-task scoping or parameter validation.
+- **AG05 / AG10:** Remote MCP server identity, OAuth audience, or transport trust cannot be verified.
+- **AG02 / AG06:** MCP resource URI templates permit broad file, URL, or tenant retrieval that can be used for exfiltration.
+- **AG05:** Runtime MCP registry cannot be exported, or it differs from the reviewed manifest.
+- **AG03 / AG10:** `stdio` server launches mutable or unpinned packages, inherits broad environment secrets, or receives an unrestricted filesystem root.
+- **AG06:** MCP tool/resource results can cause external URL fetches, markdown/image exfiltration, or prompt injection without validation.
 
 ### Hands-On Assessment Tooling
 
@@ -494,6 +527,11 @@ Structure the final report as follows:
 - Memory stores: [types]
 - Human approval gates: [present/absent, description]
 - Multi-agent communication: [method]
+
+## MCP Tool and Resource Boundary
+| Server | Transport | Identity/Provenance | Auth Boundary | Tools/Resources/Prompts | Side Effects | Registry Matches Review? | Resource Scope | Result Trust Handling |
+|---|---|---|---|---|---|---|---|---|
+| [server] | [stdio/http/custom] | [pinned/trusted/unknown] | [OAuth/mTLS/local/none] | [summary] | [read/write/destructive/external] | [yes/no/not evaluable] | [tenant/path bounds] | [validated/untrusted/not reviewed] |
 
 ## Findings by Threat Category
 
@@ -586,6 +624,10 @@ Persistent agent memory is a high-value target because it persists across sessio
 
 A tool functioning correctly is not the same as a tool being used correctly. The agent controls what parameters it passes, what sequence it calls tools in, and how it interprets results. A legitimate database query tool becomes an exfiltration vector when the agent is manipulated into querying sensitive tables and sending the results to an external webhook. Secure the tool invocation, not just the tool implementation.
 
+### 6. Treating MCP Configs as Static Tool Documentation
+
+MCP servers can expose tools, resources, and prompts at runtime, and remote servers can change what they advertise after a code review. Review the runtime registry, server identity, transport authorization, and resource URI templates. A checked-in `mcpServers` config is evidence to inspect, not proof that the production agent has only those capabilities.
+
 ---
 
 ## Prompt Injection Safety Notice
@@ -617,3 +659,6 @@ This skill is designed to be resilient against prompt injection. The following r
 9. LangChain Arbitrary Code Execution — CVE-2023-29374
 10. NIST SP 800-53 Rev. 5, Security and Privacy Controls — [nist.gov](https://csrc.nist.gov/publications/detail/sp/800-53/rev-5/final)
 11. fabraix/playground — Open-source AI agent red-team exploit library with PoCs for OWASP Agentic AI Top 10 risks — https://github.com/fabraix/playground
+12. Model Context Protocol Transports — https://modelcontextprotocol.io/specification/2025-06-18/basic/transports
+13. Model Context Protocol Authorization — https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization
+14. Model Context Protocol specification repository — https://github.com/modelcontextprotocol/modelcontextprotocol
