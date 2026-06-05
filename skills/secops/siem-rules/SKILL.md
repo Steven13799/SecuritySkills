@@ -99,6 +99,44 @@ Select the appropriate detection logic pattern based on the threat being detecte
 
 ---
 
+#### Pre-Alert Enrichment Gates
+
+Before treating identity detections as alertable, document the trust context that separates adversary behavior from normal enterprise routing and automation. Apply these gates when generating or reviewing impossible-travel, password-spray, off-hours privileged-use, and similar identity rules.
+
+| Gate | Purpose | Example Evidence |
+|------|---------|------------------|
+| Trusted egress ranges | Suppress geography artifacts from corporate VPN, SASE, proxy, and IdP egress nodes | Sentinel named locations, Splunk CIDR lookup, proxy egress inventory |
+| ASN / provider continuity | Distinguish unmanaged source changes from movement between known corporate or carrier networks | ASN lookup, ISP/provider field, cloud egress owner |
+| Device and session continuity | Avoid alerting when the same managed device/session explains rapid location changes | DeviceId, SessionId, MDE device state, compliance state |
+| Identity type | Split human users, break-glass accounts, service accounts, service principals, and managed identities | IdP account type, app/service principal flag, workload identity inventory |
+| GeoIP confidence | Avoid severity decisions based on low-confidence or headquarters-based GeoIP results | GeoIP source, precision/confidence field, enrichment timestamp |
+
+If a gate cannot be populated, keep the condition visible in the rule output as an evidence gap rather than silently replacing it with a broad exclusion. Unknown ASN changes, unmanaged devices, risky sign-in state, or unfamiliar sessions should remain alertable.
+
+**KQL trusted egress pattern:**
+
+```kql
+let TrustedEgress = datatable(IPAddress:string, Provider:string, Asn:int)
+[
+    "198.51.100.10", "Corporate SASE", 64512,
+    "203.0.113.20", "Corporate SASE", 64512
+];
+SigninLogs
+| where TimeGenerated > ago(24h)
+| lookup kind=leftouter TrustedEgress on IPAddress
+| extend IsTrustedEgress = isnotempty(Provider)
+```
+
+**SPL identity-type pattern:**
+
+```spl
+index=o365 Operation=UserLoggedIn
+| lookup identity_inventory user as UserId output identity_type, privileged, managed_device
+| where identity_type!="service_account" AND identity_type!="managed_identity"
+```
+
+---
+
 #### Detection: Brute Force -- Password Spray (KQL)
 
 **ATT&CK:** T1110.003 -- Brute Force: Password Spraying
@@ -160,10 +198,17 @@ SigninLogs
 let travel_speed_kmh = 900;  // Maximum plausible travel speed (commercial flight)
 let min_distance_km = 500;   // Minimum distance to flag (avoids VPN/proxy noise)
 let time_window = 24h;
+let TrustedEgress = datatable(IPAddress:string, Provider:string)
+[
+    "198.51.100.10", "Corporate VPN",
+    "203.0.113.20", "Corporate SASE"
+];
 SigninLogs
 | where TimeGenerated > ago(time_window)
 | where ResultType == 0  // Successful logins only
 | where isnotempty(LocationDetails.geoCoordinates.latitude)
+| lookup kind=leftouter TrustedEgress on IPAddress
+| where isempty(Provider)  // Remove trusted VPN/SASE/proxy geography artifacts
 | extend
     Latitude = todouble(LocationDetails.geoCoordinates.latitude),
     Longitude = todouble(LocationDetails.geoCoordinates.longitude),
@@ -214,10 +259,13 @@ SigninLogs
 let business_start = 7;   // 7 AM
 let business_end = 19;    // 7 PM
 let weekend_days = dynamic(["Saturday", "Sunday"]);
-let privileged_patterns = dynamic(["admin", "svc-", "sa-", "break-glass", "emergency"]);
+let privileged_patterns = dynamic(["admin", "break-glass", "emergency"]);
+let service_identity_patterns = dynamic(["svc-", "sa-"]);
 SigninLogs
 | where TimeGenerated > ago(24h)
 | where ResultType == 0
+| extend IsServiceIdentity = UserPrincipalName has_any (service_identity_patterns)
+| where IsServiceIdentity == false
 | extend
     HourOfDay = hourofday(TimeGenerated),
     DayOfWeek = dayofweek(TimeGenerated),
@@ -335,7 +383,9 @@ index=o365 sourcetype="o365:management:activity" Operation=UserLoggedIn
 `comment("Privileged Account Off-Hours Logon -- ATT&CK T1078.002")`
 `comment("Detects privileged account logins outside business hours")`
 index=wineventlog sourcetype="WinEventLog:Security" EventCode=4624
-    (TargetUserName="admin*" OR TargetUserName="svc-*" OR TargetUserName="sa-*")
+    (TargetUserName="admin*" OR TargetUserName="break-glass*" OR TargetUserName="emergency*")
+| lookup identity_inventory user as TargetUserName output identity_type, privileged
+| where identity_type!="service_account" AND identity_type!="managed_identity"
 | eval hour = strftime(_time, "%H")
 | eval day_of_week = strftime(_time, "%A")
 | where (hour < 7 OR hour >= 19)
@@ -540,6 +590,16 @@ Produce SIEM rule deliverables in this structure:
 | Account | [UserPrincipalName / TargetUserName] |
 | IP | [IPAddress / IpAddress] |
 | Host | [Computer / ComputerName] |
+| Device / Session | [DeviceId / SessionId / WorkstationName] |
+| Identity Type | [identity_type / service principal flag / managed identity flag] |
+
+### Enrichment and Trust Context
+| Context | Lookup / Source | Key Field | Freshness | Alert Behavior |
+|---------|-----------------|-----------|-----------|----------------|
+| Trusted egress | [Named location / CIDR lookup] | [IPAddress] | [Updated date] | [Suppress / lower severity / retain as evidence gap] |
+| ASN / provider | [GeoIP or ASN lookup] | [IPAddress] | [Updated date] | [Alert on unmanaged provider change] |
+| Identity inventory | [IdP / CMDB / Splunk identity lookup] | [UserPrincipalName] | [Updated date] | [Separate human, service, break-glass, managed identity] |
+| Device/session | [MDE / EDR / IdP session fields] | [DeviceId / SessionId] | [Updated date] | [Require unmanaged or unfamiliar context for high severity] |
 
 ### Known False Positives
 - [List specific FP sources]
